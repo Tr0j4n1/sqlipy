@@ -13,7 +13,7 @@ Description:    This plugin leverages the SQLMap API to initiate SQLMap scans ag
 - Three tabs (Scan, Tasks, API). Rarely used options are folded and only one folded section is open at a time.
 - The API start and all API calls run in the background, so Burp no longer freezes.
 - The Tasks tab shows the status, results, log and sqlmap command of every task.
-- Dump dialog: list databases, list tables, dump a table, a database or everything.
+- Dump dialog: list databases, list tables, dump a table, a database or everything. Its folded Speed row changes threads, timeout etc. per dump.
 - Dumped data tab: view the rows, copy a cell, row, column or table, or save as CSV.
 - Results ignore sqlmap's in-progress console text, so lists are no longer split into characters.
 
@@ -104,6 +104,11 @@ ENUM_OPTIONS = [('getCurrentUser', 'Current user'), ('getCurrentDb', 'Current DB
                 ('getUsers', 'Users'), ('getPasswordHashes', 'Password hashes'), ('getPrivileges', 'Privileges'), ('getRoles', 'Roles'),
                 ('getDbs', 'Databases'), ('getTables', 'Tables'), ('getColumns', 'Columns'), ('getSchema', 'Schema'),
                 ('getCount', 'Row counts')]
+
+# Speed row on the Scan tab and in the Dump dialog: (sqlmap API option, label, choices, default)
+SPEED_OPTIONS = [('threads', 'Threads', range(1, 11), 1), ('delay', 'Delay (s)', range(0, 6), 0),
+                 ('timeout', 'Timeout (s)', [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60], 30),
+                 ('retries', 'Retries', range(1, 11), 3), ('timeSec', 'Time-sec', range(1, 16), 5)]
 
 # Options a follow-up task (Dump or List tables) does not inherit from its parent scan
 ENUM_KEYS = [key for key, label in ENUM_OPTIONS] + ['getBanner', 'dumpTable', 'dumpAll', 'excludeSysDbs', 'db', 'tbl', 'col', 'dumpWhere', 'limitStart', 'limitStop']
@@ -680,6 +685,19 @@ class Form(object):
     self.put(ruler, 0, top=0, bottom=0, right=14)
     self.y += 1
 
+def speedRow(form, values=None):
+  # The Threads ... Time-sec row. values (sqlmap option -> number) sets the boxes, else the defaults.
+  # Returns (sqlmap option -> combo box, the row's components).
+  boxes = OrderedDict()
+  items = []
+  for key, label, choices, default in SPEED_OPTIONS:
+    boxes[key] = swing.JComboBox(choices)
+    boxes[key].setSelectedItem((values or {}).get(key, default))
+    if items:
+      items.append(label)
+    items.append(boxes[key])
+  return boxes, form.row('Threads', hbox(*items))
+
 class Section(object):
   def __init__(self, accordion, button):
     self.accordion = accordion
@@ -699,9 +717,9 @@ class Section(object):
       c.setVisible(opened)
 
 class Accordion(object):
-  # Folded sections where opening one closes the others
-  def __init__(self, ext, form):
-    self.ext = ext
+  # Folded sections where opening one closes the others. Section buttons are added to bold for the font pass.
+  def __init__(self, bold, form):
+    self.bold = bold
     self.form = form
     self.sections = []
 
@@ -714,7 +732,7 @@ class Accordion(object):
     button.setHorizontalAlignment(swing.SwingConstants.LEFT)
     button.setBorder(EmptyBorder(4, 0, 4, 0))
     button.setIconTextGap(8)
-    self.ext.bold.append(button)
+    self.bold.append(button)
     section = Section(self, button)
     button.addActionListener(Action(lambda e, s=section: self.toggle(s)))
     section.setOpen(False)
@@ -728,6 +746,10 @@ class Accordion(object):
       s.setOpen(s is section and opening)
     self.form.panel.revalidate()
     self.form.panel.repaint()
+    # A dialog does not grow by itself when a section opens
+    window = SwingUtilities.getWindowAncestor(self.form.panel)
+    if isinstance(window, swing.JDialog):
+      window.pack()
 
 class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateListener):
 
@@ -878,7 +900,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     self.fCookie = swing.JTextField(30)
     f.row('Cookie', self.fCookie)
 
-    acc = Accordion(self, f)
+    acc = Accordion(self.bold, f)
 
     s = acc.section('What to get')
     self.chk = OrderedDict()
@@ -940,15 +962,8 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     s.add(f.row('Tor', hbox(self.chkTor, 'Type', self.cTorType, 'Port', self.fTorPort)))
 
     s = acc.section('Speed')
-    self.cThreads = swing.JComboBox(range(1, 11))
-    self.cDelay = swing.JComboBox(range(0, 6))
-    self.cTimeout = swing.JComboBox([1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60])
-    self.cTimeout.setSelectedIndex(6)
-    self.cRetries = swing.JComboBox(range(1, 11))
-    self.cRetries.setSelectedIndex(2)
-    self.cTimeSec = swing.JComboBox(range(1, 16))
-    self.cTimeSec.setSelectedIndex(4)
-    s.add(f.row('Threads', hbox(self.cThreads, 'Delay (s)', self.cDelay, 'Timeout (s)', self.cTimeout, 'Retries', self.cRetries, 'Time-sec', self.cTimeSec)))
+    self.speed, row = speedRow(f)
+    s.add(row)
 
     acc.toggle(whatToGet)
 
@@ -1400,11 +1415,8 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     if self.chkHpp.isSelected():
       o['hpp'] = True
 
-    o['threads'] = self.cThreads.getSelectedItem()
-    o['delay'] = self.cDelay.getSelectedItem()
-    o['timeout'] = self.cTimeout.getSelectedItem()
-    o['retries'] = self.cRetries.getSelectedItem()
-    o['timeSec'] = self.cTimeSec.getSelectedItem()
+    for key, box in self.speed.items():
+      o[key] = box.getSelectedItem()
 
     o['getBanner'] = True
     for key, box in self.chk.items():
@@ -1805,8 +1817,15 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     f.row('Column(s)', fCol)
     f.row('', hbox(chkAll, chkSkip))
     f.full(swing.JLabel('Empty Database = current database. Not sure of the names? List databases, then List tables.'), top=8)
+    # Folded; starts at the selected task's values
+    bold = []
+    s = Accordion(bold, f).section('Speed')
+    speed, row = speedRow(f, t.options)
+    s.add(row)
     f.finish()
     self._callbacks.customizeUiComponent(f.panel)
+    for c in bold:
+      c.setFont(c.getFont().deriveFont(Font.BOLD))
 
     # Buttons in the order you use them; Dump stays the default
     actions = ['dbs', 'tables', 'dump']
@@ -1818,12 +1837,14 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
 
     tbl = unicode(cTbl.getEditor().getItem() or '').strip()
     self.followUp(t, actions[choice], unicode(cDb.getEditor().getItem() or '').strip(), '' if tbl == '(all tables)' else tbl,
-                  fCol.getText().strip(), chkAll.isSelected(), chkSkip.isSelected())
+                  fCol.getText().strip(), chkAll.isSelected(), chkSkip.isSelected(),
+                  OrderedDict([(k, box.getSelectedItem()) for k, box in speed.items()]))
 
-  def followUp(self, t, action, db, tbl, col, everything, skipSys):
+  def followUp(self, t, action, db, tbl, col, everything, skipSys, speed=None):
     # New task on the same request that reuses sqlmap's stored session, so detection is not repeated.
-    # action is 'dbs' (list databases), 'tables' (list tables) or 'dump'.
+    # action is 'dbs' (list databases), 'tables' (list tables) or 'dump'. speed replaces the parent's threads, timeout etc.
     opts = OrderedDict([(k, v) for k, v in t.options.items() if k not in ENUM_KEYS])
+    opts.update(speed or {})
     opts['getBanner'] = True
     if action == 'dbs':
       opts['getDbs'] = True

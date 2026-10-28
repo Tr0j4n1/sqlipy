@@ -12,7 +12,7 @@ A Burp Suite extension that runs sqlmap scans through the sqlmap API, shows the 
 - **Three tabs:** Scan, Tasks and API. Rarely used options are folded. One section opens at a time.
 - **No freezes.** The API starts in the background. **Start scan** starts the API when it is not running.
 - **Tasks tab.** Status, results, log and the equivalent sqlmap command of every task. Stop or remove a task.
-- **Dump dialog.** List databases, list tables, dump a table, a database or everything. It reuses the sqlmap session, so detection does not run again.
+- **Dump dialog.** List databases, list tables, dump a table, a database or everything. It reuses the sqlmap session, so detection does not run again. Open **Speed** in the dialog to change threads, delay, timeout, retries and time-sec for that dump.
 - **Dumped data tab.** Every dumped table as a grid. Copy a cell, row, column or the whole table. Save as CSV.
 - **Multi-table dumps.** SQLiPy reads every CSV file that sqlmap writes, from disk or through the API.
 - **More places to start a scan.** Right-click **SQLiPy Scan** works in Proxy history, the site map, Repeater and message editors.
