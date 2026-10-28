@@ -13,7 +13,8 @@ Description:    This plugin leverages the SQLMap API to initiate SQLMap scans ag
 - Three tabs (Scan, Tasks, API). Rarely used options are folded and only one folded section is open at a time.
 - The API start and all API calls run in the background, so Burp no longer freezes.
 - The Tasks tab shows the status, results, log and sqlmap command of every task.
-- Dump dialog: list databases, list tables, dump a table, a database or everything. Its folded Speed row changes threads, timeout etc. per dump.
+- Dump dialog: list databases, list tables, dump a table, a database or everything. Its folded Speed and log section changes threads, timeout, verbose level etc. per dump.
+- Verbose level (sqlmap -v 1 to 6) on the Scan tab and in the Dump dialog. Payloads and HTTP traffic show in the task log.
 - Dumped data tab: view the rows, copy a cell, row, column or table, or save as CSV.
 - Results ignore sqlmap's in-progress console text, so lists are no longer split into characters.
 
@@ -110,6 +111,11 @@ SPEED_OPTIONS = [('threads', 'Threads', range(1, 11), 1), ('delay', 'Delay (s)',
                  ('timeout', 'Timeout (s)', [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60], 30),
                  ('retries', 'Retries', range(1, 11), 3), ('timeSec', 'Time-sec', range(1, 16), 5)]
 
+# sqlmap -v levels. Each level also logs everything the levels below it log. sqlmap's default is 1.
+# Level 0 is left out: it hides the log lines that name the CSV files, so a multi-table dump would show only its last table.
+VERBOSE_LEVELS = OrderedDict([(1, 'Info (default)'), (2, 'Debug'), (3, 'Payloads'), (4, 'HTTP requests'),
+                              (5, 'Response headers'), (6, 'Response bodies')])
+
 # Options a follow-up task (Dump or List tables) does not inherit from its parent scan
 ENUM_KEYS = [key for key, label in ENUM_OPTIONS] + ['getBanner', 'dumpTable', 'dumpAll', 'excludeSysDbs', 'db', 'tbl', 'col', 'dumpWhere', 'limitStart', 'limitStop']
 
@@ -119,7 +125,7 @@ CLI_FLAGS = [('url', '-u'), ('method', '--method'), ('data', '--data'), ('cookie
              ('ignoreCode', '--ignore-code'), ('proxy', '--proxy'), ('tor', '--tor'), ('torType', '--tor-type'), ('torPort', '--tor-port'),
              ('testParameter', '-p'), ('dbms', '--dbms'), ('os', '--os'), ('tamper', '--tamper'), ('level', '--level'), ('risk', '--risk'),
              ('technique', '--technique'), ('textOnly', '--text-only'), ('hpp', '--hpp'), ('threads', '--threads'), ('delay', '--delay'),
-             ('timeout', '--timeout'), ('retries', '--retries'), ('timeSec', '--time-sec'), ('getBanner', '-b'),
+             ('timeout', '--timeout'), ('retries', '--retries'), ('timeSec', '--time-sec'), ('verbose', '-v'), ('getBanner', '-b'),
              ('getCurrentUser', '--current-user'), ('getCurrentDb', '--current-db'), ('getHostname', '--hostname'), ('isDba', '--is-dba'),
              ('getUsers', '--users'), ('getPasswordHashes', '--passwords'), ('getPrivileges', '--privileges'), ('getRoles', '--roles'),
              ('getDbs', '--dbs'), ('getTables', '--tables'), ('getColumns', '--columns'), ('getSchema', '--schema'), ('getCount', '--count'),
@@ -550,6 +556,17 @@ class StatusRenderer(DefaultTableCellRenderer):
     self.setIcon(Dot(STATUS_COLORS.get(value, GREY), 8) if value else None)
     self.setIconTextGap(6)
 
+class LevelRenderer(swing.ListCellRenderer):
+  # Shows a verbose level as "3 - Payloads". The look and feel's own renderer still draws it.
+  def __init__(self, inner):
+    self.inner = inner
+
+  def getListCellRendererComponent(self, lst, value, index, selected, focused):
+    c = self.inner.getListCellRendererComponent(lst, value, index, selected, focused)
+    if value in VERBOSE_LEVELS and isinstance(c, swing.JLabel):
+      c.setText('%d - %s' % (value, VERBOSE_LEVELS[value]))
+    return c
+
 class ReadOnlyModel(DefaultTableModel):
   def isCellEditable(self, row, column):
     return False
@@ -685,18 +702,23 @@ class Form(object):
     self.put(ruler, 0, top=0, bottom=0, right=14)
     self.y += 1
 
-def speedRow(form, values=None):
-  # The Threads ... Time-sec row. values (sqlmap option -> number) sets the boxes, else the defaults.
-  # Returns (sqlmap option -> combo box, the row's components).
+def speedRows(form, values=None):
+  # The Threads ... Time-sec row and the Verbose row. values (sqlmap option -> number) sets the boxes, else the defaults.
+  # Returns (sqlmap option -> combo box, the rows' components).
+  values = values or {}
   boxes = OrderedDict()
   items = []
   for key, label, choices, default in SPEED_OPTIONS:
     boxes[key] = swing.JComboBox(choices)
-    boxes[key].setSelectedItem((values or {}).get(key, default))
+    boxes[key].setSelectedItem(values.get(key, default))
     if items:
       items.append(label)
     items.append(boxes[key])
-  return boxes, form.row('Threads', hbox(*items))
+  verbose = boxes['verbose'] = swing.JComboBox(list(VERBOSE_LEVELS.keys()))
+  verbose.setRenderer(LevelRenderer(verbose.getRenderer()))
+  verbose.setSelectedItem(values.get('verbose', 1))
+  return boxes, (form.row('Threads', hbox(*items)) +
+                 form.row('Verbose', hbox(verbose, '3 and up show payloads and HTTP traffic in the task log.')))
 
 class Section(object):
   def __init__(self, accordion, button):
@@ -961,9 +983,9 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     self.fTorPort = swing.JTextField('9050', 5)
     s.add(f.row('Tor', hbox(self.chkTor, 'Type', self.cTorType, 'Port', self.fTorPort)))
 
-    s = acc.section('Speed')
-    self.speed, row = speedRow(f)
-    s.add(row)
+    s = acc.section('Speed and log')
+    self.speed, rows = speedRows(f)
+    s.add(rows)
 
     acc.toggle(whatToGet)
 
@@ -1819,9 +1841,9 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     f.full(swing.JLabel('Empty Database = current database. Not sure of the names? List databases, then List tables.'), top=8)
     # Folded; starts at the selected task's values
     bold = []
-    s = Accordion(bold, f).section('Speed')
-    speed, row = speedRow(f, t.options)
-    s.add(row)
+    s = Accordion(bold, f).section('Speed and log')
+    speed, rows = speedRows(f, t.options)
+    s.add(rows)
     f.finish()
     self._callbacks.customizeUiComponent(f.panel)
     for c in bold:
