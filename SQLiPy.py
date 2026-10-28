@@ -13,7 +13,7 @@ Description:    This plugin leverages the SQLMap API to initiate SQLMap scans ag
 - Three tabs (Scan, Tasks, API). Rarely used options are folded and only one folded section is open at a time.
 - The API start and all API calls run in the background, so Burp no longer freezes.
 - The Tasks tab shows the status, results, log and sqlmap command of every task.
-- Dump dialog: list databases, list tables, dump a table, a database or everything. Its folded Speed and log section changes threads, timeout, verbose level etc. per dump.
+- Dump dialog: list databases, list tables, dump a table, a database or everything. Type a database or table name, or pick one. Its folded Speed and log section changes threads, timeout, verbose level etc. per dump.
 - Verbose level (sqlmap -v 1 to 6) on the Scan tab and in the Dump dialog. Payloads and HTTP traffic show in the task log.
 - Dumped data tab: view the rows, copy a cell, row, column or table, or save as CSV.
 - Results ignore sqlmap's in-progress console text, so lists are no longer split into characters.
@@ -58,6 +58,7 @@ from java.awt import RenderingHints
 from java.awt import Toolkit
 from java.awt.datatransfer import StringSelection
 from java.awt.event import ActionListener
+from java.awt.event import FocusAdapter
 from java.awt.event import MouseAdapter
 from java.beans import PropertyChangeListener
 from javax.swing import UIManager
@@ -555,6 +556,11 @@ class StatusRenderer(DefaultTableCellRenderer):
     self.setText(value or '')
     self.setIcon(Dot(STATUS_COLORS.get(value, GREY), 8) if value else None)
     self.setIconTextGap(6)
+
+class SelectAllOnFocus(FocusAdapter):
+  # Selects a field's text when you click or tab into it, so typing replaces it
+  def focusGained(self, e):
+    onEdt(e.getComponent().selectAll)
 
 class LevelRenderer(swing.ListCellRenderer):
   # Shows a verbose level as "3 - Payloads". The look and feel's own renderer still draws it.
@@ -1813,23 +1819,28 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     if t is None or t.result is None or not t.result.vulnerable:
       return
 
+    # Database and Table(s) take a typed name or one picked from the names found so far
     dbs, tables, current = self.knownSchema(t.url)
+    text = lambda combo: unicode(combo.getEditor().getItem() or '').strip()
     cDb = swing.JComboBox(dbs)
-    cDb.setEditable(True)
-    cDb.setSelectedItem(current or (dbs[0] if dbs else ''))
     cTbl = swing.JComboBox()
-    cTbl.setEditable(True)
+    for combo in (cDb, cTbl):
+      combo.setEditable(True)
+      combo.getEditor().getEditorComponent().addFocusListener(SelectAllOnFocus())
+    cDb.setSelectedItem(current or (dbs[0] if dbs else ''))
 
     def refreshTables(event=None):
-      db = unicode(cDb.getEditor().getItem() or '').strip()
+      # List the known tables of the database. Keep what is in Table(s); empty means all tables.
+      typed = text(cTbl)
       cTbl.removeAllItems()
-      cTbl.addItem('(all tables)')
-      for name in tables.get(db, []):
+      for name in tables.get(text(cDb), []):
         cTbl.addItem(name)
+      cTbl.setSelectedItem(typed)
     cDb.addActionListener(Action(refreshTables))
     refreshTables()
 
     fCol = swing.JTextField(16)
+    fCol.addFocusListener(SelectAllOnFocus())
     chkAll = swing.JCheckBox('Dump all databases')
     chkSkip = swing.JCheckBox('Skip system databases', True)
 
@@ -1838,7 +1849,8 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     f.row('Table(s)', cTbl)
     f.row('Column(s)', fCol)
     f.row('', hbox(chkAll, chkSkip))
-    f.full(swing.JLabel('Empty Database = current database. Not sure of the names? List databases, then List tables.'), top=8)
+    f.full(swing.JLabel('<html>Type a name or pick one. Empty Database = current database, empty Table(s) = all tables.<br>'
+                        'Not sure of the names? Click List databases, then List tables.</html>'), top=8)
     # Folded; starts at the selected task's values
     bold = []
     s = Accordion(bold, f).section('Speed and log')
@@ -1857,9 +1869,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab, IExtensionStateList
     if not 0 <= choice < len(actions):
       return
 
-    tbl = unicode(cTbl.getEditor().getItem() or '').strip()
-    self.followUp(t, actions[choice], unicode(cDb.getEditor().getItem() or '').strip(), '' if tbl == '(all tables)' else tbl,
-                  fCol.getText().strip(), chkAll.isSelected(), chkSkip.isSelected(),
+    self.followUp(t, actions[choice], text(cDb), text(cTbl), fCol.getText().strip(), chkAll.isSelected(), chkSkip.isSelected(),
                   OrderedDict([(k, box.getSelectedItem()) for k, box in speed.items()]))
 
   def followUp(self, t, action, db, tbl, col, everything, skipSys, speed=None):

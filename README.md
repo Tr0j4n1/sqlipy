@@ -60,7 +60,7 @@ flowchart LR
 2. On the **Scan** tab, tick what to get. Click **Start scan**.
 3. Follow the task on the **Tasks** tab.
 4. Select a vulnerable task. Click **Dump...**.
-5. Click **List databases**, then **List tables**, then **Dump**.
+5. Type a database or table name, or pick one from the list. Click **List databases**, **List tables** or **Dump**.
 6. Open **Dumped data**. Right-click a cell to copy it, or click **Save CSV...**.
 
 Only scan systems that you have permission to test.
